@@ -60,8 +60,9 @@ def _to_bytes(img):
 def main():
     config.ensure_dirs()
     image_store = ImageStore()
-    cache = ResultCache()
     history = HistoryManager()
+    cache = ResultCache(
+        pinned_checker=lambda rid, exclude=None: history.result_ref_count(rid, exclude) > 0)
 
     print("== 生成测试图 ==")
     fixtures = {

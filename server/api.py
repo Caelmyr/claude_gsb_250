@@ -24,8 +24,10 @@ from . import storage as storage_mod
 # ---------------------------------------------------------------------------
 config.ensure_dirs()
 image_store = ImageStore()
-cache = ResultCache()
+# 历史先于缓存创建：结果缓存的淘汰/联动删除需要向历史查询引用关系
 history = HistoryManager()
+cache = ResultCache(
+    pinned_checker=lambda rid, exclude=None: history.result_ref_count(rid, exclude) > 0)
 batch = BatchManager(image_store, cache, history)
 presets_store = JsonStore(config.PRESETS_JSON, [])
 
@@ -369,6 +371,8 @@ def result_file(result_id):
     path = cache.result_path(result_id)
     if not path:
         return jsonify({"error": "not found"}), 404
+    # 历史里打开结果也算一次使用，刷新 LRU 时间，避免活跃结果被当「很久没用」淘汰
+    cache.touch_result(result_id)
     return send_file(path, mimetype="image/png")
 
 
@@ -603,7 +607,15 @@ def delete_preset(pid):
 # ---------------------------------------------------------------------------
 @bp.get("/history")
 def list_history():
-    return jsonify({"history": history.list()})
+    items = history.list()
+    # 统计每张结果图被多少条历史共用，列表上据此标出「共享结果」关联
+    ref_counts = history.result_ref_counts()
+    for e in items:
+        rid = e.get("result_id")
+        count = ref_counts.get(rid, 0) if rid else 0
+        e["result_ref_count"] = count
+        e["result_shared"] = count > 1
+    return jsonify({"history": items})
 
 
 @bp.get("/history/<history_id>")
@@ -617,10 +629,18 @@ def get_history(history_id):
 @bp.delete("/history/<history_id>")
 def delete_history(history_id):
     e = history.get(history_id)
-    if e and e.get("result_id"):
-        cache.delete_result(e["result_id"])
+    result_id = (e or {}).get("result_id")
+
+    # 先删历史本身；同时把正在删除的 id 传给缓存做排除，
+    # 这样无论删除先后，判断的都是「删完这条后是否还有其他历史引用该结果」。
+    # 缓存命中产生的共享结果（多条历史共用一张图）会被保留。
+    result_deleted = False
+    if result_id:
+        result_deleted = cache.delete_result(result_id, exclude_history_id=history_id)
     history.delete(history_id)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True,
+                    "result_deleted": result_deleted,
+                    "result_retained": bool(result_id) and not result_deleted})
 
 
 @bp.post("/history/<history_id>/restore")

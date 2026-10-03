@@ -42,6 +42,29 @@ class HistoryManager:
         self.store.update(_upd)
         return True
 
+    # ---------------------------------------------------------- 结果引用计数
+    def result_ref_counts(self):
+        """返回 {result_id: 引用该结果的历史条数}。
+
+        缓存命中时同一张结果图会被多条历史共用，计数 > 1 即「共享结果」。
+        删除结果文件 / LRU 淘汰前必须据此判断结果是否还活着。
+        """
+        counts = {}
+        for e in self.store.read():
+            rid = e.get("result_id")
+            if rid:
+                counts[rid] = counts.get(rid, 0) + 1
+        return counts
+
+    def result_ref_count(self, result_id, exclude_history_id=None):
+        """统计某张结果图还被多少条历史引用；可排除一条正在删除的历史。"""
+        if not result_id:
+            return 0
+        return sum(
+            1 for e in self.store.read()
+            if e.get("result_id") == result_id and e.get("id") != exclude_history_id
+        )
+
     def restore_snapshot(self, history_id):
         """返回某条历史里的流水线快照（供恢复版本）。"""
         e = self.get(history_id)
