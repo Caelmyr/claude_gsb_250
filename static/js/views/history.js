@@ -37,7 +37,7 @@ window.Views.history = (function () {
         <td>${C.esc(e.pipeline_name || "临时")}</td>
         <td>${e.node_count}</td>
         <td>${C.fmtMs(e.duration_ms)}</td>
-        <td><span class="badge ${e.status === "ok" ? "green" : "red"}">${e.status === "ok" ? "成功" : "失败"}</span>${e.cache_hit ? ' <span class="badge">缓存</span>' : ""}</td>
+        <td><span class="badge ${e.status === "ok" ? "green" : "red"}">${e.status === "ok" ? "成功" : "失败"}</span>${e.cache_hit ? ' <span class="badge">缓存</span>' : ""}${(e.result_ref_count || 0) > 1 ? ` <span class="badge amber" title="该结果图被 ${e.result_ref_count} 条历史共用，删此条不会删除结果图">共享×${e.result_ref_count}</span>` : ""}</td>
         <td><button class="btn btn-sm" data-id="${e.id}">查看</button></td>
       </tr>`).join("") + `</tbody></table>`;
 
@@ -67,6 +67,7 @@ window.Views.history = (function () {
         ${nodeResults.length ? `<div><span class="dim">节点执行</span> ${nodeResults.map((n) => `${n.ok ? "✓" : "✗"}${n.node_id}`).join(" ")}</div>` : ""}
       </div>
       ${e.result_id ? `<img src="/api/results/${e.result_id}/file" style="width:100%;border-radius:8px;margin-top:10px">` : ""}
+      ${(e.result_ref_count || 0) > 1 ? `<div style="margin-top:8px"><span class="badge amber">共享×${e.result_ref_count}</span> <span class="dim">该结果图还被另外 ${e.result_ref_count - 1} 条历史引用，删除本条不会删除结果图</span></div>` : ""}
       <div class="toolbar" style="margin-top:12px">
         <button class="btn" id="hi-restore">恢复为流水线</button>
         <button class="btn btn-danger" id="hi-del">删除记录</button>
@@ -77,10 +78,14 @@ window.Views.history = (function () {
       await C.refreshPipelines();
     };
     box.querySelector("#hi-del").onclick = async () => {
-      if (!confirm("删除该历史记录（连同结果文件）？")) return;
-      await Api.del(`/api/history/${e.id}`);
+      const shared = (e.result_ref_count || 0) > 1;
+      const msg = shared
+        ? `该结果图正被 ${e.result_ref_count} 条历史共用。删除本条记录不会影响其它记录的结果图，确认删除？`
+        : "删除该历史记录？没有其它记录引用的结果图将一并删除。";
+      if (!confirm(msg)) return;
+      const r = await Api.del(`/api/history/${e.id}`);
       current = null;
-      C.toast("已删除", "success");
+      C.toast(r && r.result_removed ? "已删除（结果图已清理）" : "已删除（结果图仍被其它记录引用，已保留）", "success");
       load(document.querySelector('.view[data-view="history"]'));
     };
   }

@@ -27,6 +27,9 @@ image_store = ImageStore()
 cache = ResultCache()
 history = HistoryManager()
 batch = BatchManager(image_store, cache, history)
+# 缓存淘汰/删除结果前，向历史确认引用情况：多条历史可共用同一张结果图，
+# 仍被引用的结果不能被腾空间或删单条历史连带清掉。
+cache.protected_result_ids_provider = history.referenced_result_ids
 presets_store = JsonStore(config.PRESETS_JSON, [])
 
 bp = Blueprint("api", __name__, url_prefix="/api")
@@ -603,7 +606,16 @@ def delete_preset(pid):
 # ---------------------------------------------------------------------------
 @bp.get("/history")
 def list_history():
-    return jsonify({"history": history.list()})
+    # 附上每条历史结果的共享引用数：同图同流水线重复跑会命中同一结果，
+    # ref_count > 1 说明这条记录的结果图还被别的历史共用着。
+    counts = history.reference_counts()
+    items = []
+    for e in history.list():
+        rid = e.get("result_id")
+        item = dict(e)
+        item["result_ref_count"] = counts.get(rid, 0) if rid else 0
+        items.append(item)
+    return jsonify({"history": items})
 
 
 @bp.get("/history/<history_id>")
@@ -617,10 +629,17 @@ def get_history(history_id):
 @bp.delete("/history/<history_id>")
 def delete_history(history_id):
     e = history.get(history_id)
-    if e and e.get("result_id"):
-        cache.delete_result(e["result_id"])
+    if not e:
+        return jsonify({"ok": True})
+    rid = e.get("result_id")
+    # 先删历史，再按「删除后还剩哪些引用」决定结果图去留：
+    # 同一张结果可能被多条历史共用，只要还有一条在引用就必须保留。
     history.delete(history_id)
-    return jsonify({"ok": True})
+    result_removed = False
+    if rid:
+        remaining = history.referenced_result_ids()
+        result_removed = cache.delete_result(rid, protected_ids=remaining)
+    return jsonify({"ok": True, "result_removed": result_removed})
 
 
 @bp.post("/history/<history_id>/restore")

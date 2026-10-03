@@ -36,6 +36,34 @@ class HistoryManager:
                 return e
         return None
 
+    def referenced_result_ids(self, exclude_history_id=None):
+        """返回当前仍被历史引用的 result_id 集合。
+
+        同一个（图像+流水线）重复运行会命中缓存，多条历史共用同一个
+        result_id。删除历史 / 缓存淘汰动结果文件前必须用它确认引用情况，
+        不能因为清理一条记录就把别处还在用的结果图一起删掉。
+
+        exclude_history_id: 给定历史 id 时按「该条已删除」统计
+        （即先移除它再算引用）。
+        """
+        refs = set()
+        for e in self.store.read():
+            if exclude_history_id is not None and e.get("id") == exclude_history_id:
+                continue
+            rid = e.get("result_id")
+            if rid:
+                refs.add(rid)
+        return refs
+
+    def reference_counts(self):
+        """返回 result_id -> 引用它的历史条数（含失败记录的空指针不算）。"""
+        counts = {}
+        for e in self.store.read():
+            rid = e.get("result_id")
+            if rid:
+                counts[rid] = counts.get(rid, 0) + 1
+        return counts
+
     def delete(self, history_id):
         def _upd(doc):
             return [e for e in doc if e.get("id") != history_id]
